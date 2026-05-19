@@ -379,6 +379,41 @@ def get_issue_attachments(email, api_token, jira_url, issue_key):
     return []
 
 
+def download_attachment_with_redirect(url, auth, timeout=30):
+    """
+    Download a Jira attachment following Atlassian's 302 redirect to api.media.atlassian.com.
+
+    Atlassian Cloud returns HTTP 302 from the REST download endpoint, redirecting to
+    api.media.atlassian.com/file/{fileId}/binary?token=...
+    The token is pre-signed, so Basic Auth must NOT be forwarded to the media host.
+    We strip the Authorization header on cross-domain redirects via a session hook.
+    """
+    session = requests.Session()
+
+    def strip_auth_on_redirect(r, *args, **kwargs):
+        if r.is_redirect:
+            redirect_location = r.headers.get("Location", "")
+            original_host = requests.utils.urlparse(url).netloc
+            redirect_host = requests.utils.urlparse(redirect_location).netloc
+            if redirect_host and redirect_host != original_host:
+                r.request.headers.pop("Authorization", None)
+
+    session.hooks["response"].append(strip_auth_on_redirect)
+
+    try:
+        response = session.get(
+            url,
+            auth=auth,
+            headers={"Accept": "*/*"},
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        return response
+    except Exception as e:
+        raise e
+
+
 def extract_text_from_attachment(attachment, email, api_token, max_size_bytes=None):
     """Download an attachment and extract text from it."""
     att_title = attachment.get("filename", "unknown")
@@ -408,8 +443,9 @@ def extract_text_from_attachment(attachment, email, api_token, max_size_bytes=No
 
     try:
         auth = HTTPBasicAuth(email, api_token)
-        response = requests.get(download_url, auth=auth, timeout=30)
-        response.raise_for_status()
+        # Use redirect-aware downloader: Atlassian Cloud returns 302 → api.media.atlassian.com
+        # with a pre-signed token. Basic Auth must not be forwarded to the media host.
+        response = download_attachment_with_redirect(download_url, auth)
         content = response.content
 
         if is_text:
