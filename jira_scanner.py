@@ -362,6 +362,11 @@ def scan_text_for_secrets(text: str, patterns: List[Tuple[str, re.Pattern, int]]
     return findings
 
 
+@with_retry(max_retries=4, backoff=2.0)
+def _get_attachments_response(url, headers, auth, timeout):
+    return requests.get(url, headers=headers, auth=auth, timeout=timeout)
+
+
 def get_issue_attachments(email, api_token, jira_url, issue_key):
     """Fetch the list of attachments for a given Jira issue."""
     jira_url = normalize_jira_url(jira_url)
@@ -370,8 +375,8 @@ def get_issue_attachments(email, api_token, jira_url, issue_key):
     headers = {"Accept": "application/json"}
 
     try:
-        response = requests.get(url, headers=headers, auth=auth, timeout=30)
-        if response.status_code == 200:
+        response = _get_attachments_response(url, headers, auth, timeout=30)
+        if response is not None and response.status_code == 200:
             fields = response.json().get("fields", {})
             return fields.get("attachment", [])
     except Exception as e:
